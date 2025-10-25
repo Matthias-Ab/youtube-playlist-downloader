@@ -8,3 +8,13 @@
 
 # folders
 /downloaded_songs_mp3
+/80s_amharic_music
+/ethiopian_oldies_music
+
+# files
+/*.log
+/*.archive
+/*.txt
+/*.db
+/*.cache
+/*.json
