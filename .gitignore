@@ -5,3 +5,6 @@
 *.flac
 *.aac
 *.mp4
+
+# folders
+/downloaded_songs_mp3
