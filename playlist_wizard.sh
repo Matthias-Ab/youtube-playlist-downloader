@@ -3,19 +3,12 @@ set -euo pipefail
 
 # ==============================================
 # YouTube Playlist Downloader Wizard (Ubuntu 24.04)
-# - Optional install/update: yt-dlp + ffmpeg
-# - Fully interactive configuration
-# - URL export per playlist (URL-only or title;url)
-# - Audio or Video download
-# - Parallel playlists (job control)
-# - Cookies import (Chrome/Firefox) if needed
-# - Per-playlist folder + archive + logs
 # ==============================================
 
 # ---------- helpers ----------
 msg() { echo -e "\033[1;36m$*\033[0m"; }
 warn() { echo -e "\033[1;33m$*\033[0m"; }
-err() { echo -e "\033[1;31m$*\033[0m" >&2; }
+err()  { echo -e "\033[1;31m$*\033[0m" >&2; }
 confirm() {
   local prompt="${1:-Continue?} [y/N]: "
   read -rp "$prompt" ans || true
@@ -30,7 +23,6 @@ require_bin() {
 }
 
 sanitize_name() {
-  # terminal-friendly: lowercase, non-alnum -> _, collapse repeats, trim edges
   printf '%s' "$1" \
   | tr '[:upper:]' '[:lower:]' \
   | sed -E 's/[^a-z0-9]+/_/g; s/_+/_/g; s/^_|_$//g'
@@ -44,11 +36,9 @@ if confirm "Do you want me to install/update yt-dlp and ffmpeg now?"; then
   fi
   sudo apt update
   sudo apt install -y ffmpeg ca-certificates
-  # remove apt yt-dlp if present (often outdated)
   if dpkg -s yt-dlp >/dev/null 2>&1; then
     sudo apt remove -y yt-dlp || true
   fi
-  # install latest standalone yt-dlp
   sudo wget -q https://github.com/yt-dlp/yt-dlp/releases/latest/download/yt-dlp -O /usr/local/bin/yt-dlp
   sudo chmod a+rx /usr/local/bin/yt-dlp
   msg "yt-dlp version: $(/usr/local/bin/yt-dlp --version)"
@@ -96,7 +86,7 @@ else
 fi
 
 AUDIO_FMT="mp3"
-AUDIO_Q="0"   # best VBR for mp3
+AUDIO_Q="0"
 VIDEO_CONTAINER="mp4"
 if [[ "$MODE" == "audio" ]]; then
   echo
@@ -106,9 +96,9 @@ if [[ "$MODE" == "audio" ]]; then
   echo "  3) opus (very efficient)"
   read -rp "Choose [1-3]: " afmt_choice
   case "${afmt_choice:-1}" in
-    2) AUDIO_FMT="m4a"; AUDIO_Q="0" ;;
-    3) AUDIO_FMT="opus"; AUDIO_Q="0" ;;
-    *) AUDIO_FMT="mp3"; AUDIO_Q="0" ;;
+    2) AUDIO_FMT="m4a" ;;
+    3) AUDIO_FMT="opus" ;;
+    *) AUDIO_FMT="mp3" ;;
   esac
 else
   echo
@@ -129,7 +119,7 @@ echo "  1) Terminal-friendly (safe ASCII, underscores)"
 echo "  2) Keep spaces & Unicode (prettier names)"
 read -rp "Choose [1-2]: " name_choice
 if [[ "${name_choice:-1}" == "2" ]]; then
-  RESTRICT_FLAG=()   # keep nice names
+  RESTRICT_FLAG=()
 else
   RESTRICT_FLAG=(--restrict-filenames)
 fi
@@ -154,9 +144,10 @@ if ! [[ "$PARALLEL" =~ ^[0-9]+$ ]]; then PARALLEL=0; fi
 
 # ---------- collect playlist URLs ----------
 echo
-read -rp "How many playlist URLs will you enter? > " COUNT
+read -rp "How many playlist URLs will you enter? " COUNT
 if ! [[ "$COUNT" =~ ^[0-9]+$ ]] || [[ "$COUNT" -lt 1 ]]; then
-  err "Please enter a positive integer."; exit 1
+  err "Please enter a positive integer."
+  exit 1
 fi
 
 declare -a PLAYLIST_URLS=()
@@ -165,13 +156,12 @@ for ((i=1; i<=COUNT; i++)); do
   PURL="$(echo "$PURL" | sed 's/^[[:space:]]*//; s/[[:space:]]*$//')"
   [[ -z "$PURL" ]] && { warn "Empty URL, skipping this slot."; continue; }
   PLAYLIST_URLS+=("$PURL")
-fi
+done
 
 # ---------- functions ----------
 get_playlist_title() {
   local url="$1"
-  local title
-  # grab playlist title quickly; fallback to uploader + id
+  local title=""
   if ! title="$(yt-dlp $COOKIES_ARG --flat-playlist --playlist-end 1 --print "%(playlist_title)s" "$url" 2>/dev/null | head -n1)"; then
     title=""
   fi
@@ -217,7 +207,6 @@ download_one_audio() {
 
 download_one_video() {
   local url="$1" ; local outdir="$2" ; local archive="$3"
-  # bestvideo+bestaudio merged by ffmpeg; container controlled by --merge-output-format
   yt-dlp $COOKIES_ARG \
     -f "bv*+ba/b" \
     --merge-output-format "$VIDEO_CONTAINER" \
@@ -252,10 +241,10 @@ process_playlist() {
   echo "▶ Exporting playlist → $LIST_FILE"
   if [[ "$EXPORT_MODE" == "title_url" ]]; then
     export_playlist_title_url "$PURL" "$LIST_FILE"
-    URL_FEED_CMD=(awk -F';' '{print $NF}')
+    EXTRACT_URL_CMD=(cut -d ';' -f 2-)
   else
     export_playlist_urls "$PURL" "$LIST_FILE"
-    URL_FEED_CMD=(cat)
+    EXTRACT_URL_CMD=(cat)
   fi
 
   local TOTAL
@@ -271,6 +260,7 @@ process_playlist() {
   while IFS= read -r URL_ITEM; do
     n=$((n+1))
     [[ -z "$URL_ITEM" ]] && continue
+    URL_ITEM="$("${EXTRACT_URL_CMD[@]}" <<<"$URL_ITEM")"
     echo "[$n/$TOTAL] $URL_ITEM"
     if [[ "$MODE" == "audio" ]]; then
       if ! download_one_audio "$URL_ITEM" "$OUT_DIR" "$ARCHIVE_FILE"; then
@@ -281,9 +271,8 @@ process_playlist() {
         echo "$URL_ITEM" | tee -a "$FAILED_FILE"
       fi
     fi
-  done < <("${URL_FEED_CMD[@]}" "$LIST_FILE")
+  done < "$LIST_FILE"
 
-  # Retry once
   if [[ -s "$FAILED_FILE" ]]; then
     msg "▶ Retrying failed once for: $SAFE_NAME"
     mapfile -t FAILED_LIST < "$FAILED_FILE"
@@ -325,7 +314,6 @@ if [[ "$PARALLEL" -gt 0 ]]; then
       running=$((running-1))
     fi
   done
-  # wait remaining
   for pid in "${pids[@]}"; do wait "$pid"; done
 else
   for PURL in "${PLAYLIST_URLS[@]}"; do
